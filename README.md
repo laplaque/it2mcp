@@ -197,6 +197,10 @@ The `batch` tool accepts a list of operations and runs them sequentially over on
 ]
 ```
 
+## Acknowledgments
+
+Built on top of [it2](https://github.com/mkusaka/it2) by [@mkusaka](https://github.com/mkusaka) — a powerful CLI for controlling iTerm2 via its Python API. it2mcp wraps the same underlying [iterm2 Python API](https://iterm2.com/python-api/) and was heavily inspired by it2's command structure.
+
 ## License
 
 MIT
