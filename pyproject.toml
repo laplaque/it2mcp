@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "it2mcp"
+version = "0.1.0"
+description = "MCP server for controlling iTerm2 via the it2 Python API"
+# readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "iterm2>=2.13",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+it2mcp = "it2mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/it2mcp"]
