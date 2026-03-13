@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "it2mcp"
 version = "0.1.0"
 description = "MCP server for controlling iTerm2 via the it2 Python API"
-# readme = "README.md"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.0.0",
