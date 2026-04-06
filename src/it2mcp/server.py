@@ -21,6 +21,7 @@ from .security import (
     check_session_allowed,
     check_sessions_allowed,
     is_session_enabled,
+    redact_output,
 )
 
 T = TypeVar("T")
@@ -247,7 +248,7 @@ async def session_read(session_id: str | None = None, lines: int | None = None) 
         text_lines = [contents.line(i).string for i in range(contents.number_of_lines)]
         if lines is not None:
             text_lines = text_lines[-lines:] if lines < len(text_lines) else text_lines
-        result = "\n".join(text_lines)
+        result = redact_output("\n".join(text_lines))
         audit_log("session_read", {"session_id": session_id, "lines": lines})
         return result
 
@@ -1089,7 +1090,7 @@ async def _b_session_read(
     text_lines = [contents.line(i).string for i in range(contents.number_of_lines)]
     if lines is not None:
         text_lines = text_lines[-lines:] if lines < len(text_lines) else text_lines
-    return "\n".join(text_lines)
+    return redact_output("\n".join(text_lines))
 
 
 async def _b_session_split(
