@@ -5,6 +5,7 @@ Provides:
 - Session tag gating (user.mcp_enabled)
 - Audit logging
 - Config file loading
+- Secret redaction engine (pluggable)
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 import iterm2
+
+from .redact import RedactEngine
 
 # ---------------------------------------------------------------------------
 # Permission tiers
@@ -94,6 +97,8 @@ class Config:
         self.permissions: set[Tier] = {Tier.READ}
         self.require_tag: bool = True
         self.audit_log: Path | None = _DEFAULT_AUDIT_PATH
+        self.redact_engine: RedactEngine = RedactEngine(enabled=True)
+        self._raw: dict[str, Any] = {}
 
     @classmethod
     def load(cls) -> Config:
@@ -107,8 +112,9 @@ class Config:
             with open(path) as f:
                 data = yaml.safe_load(f) or {}
         except ImportError:
-            # Fall back to manual parsing if PyYAML not available
             return config
+
+        config._raw = data
 
         # permissions
         if "permissions" in data:
@@ -132,6 +138,9 @@ class Config:
             else:
                 config.audit_log = Path(data["audit_log"]).expanduser()
 
+        # redact engine
+        config.redact_engine = RedactEngine.from_config(data)
+
         return config
 
 
@@ -147,6 +156,15 @@ def get_config() -> Config:
 
 
 # ---------------------------------------------------------------------------
+# Redaction (convenience accessor)
+# ---------------------------------------------------------------------------
+
+def redact_output(text: str) -> str:
+    """Apply the configured redaction engine to terminal output."""
+    return get_config().redact_engine.redact(text)
+
+
+# ---------------------------------------------------------------------------
 # Permission checking
 # ---------------------------------------------------------------------------
 
@@ -154,7 +172,6 @@ def assert_permission(tool_name: str) -> None:
     """Raise if the tool's tier is not in the configured permissions."""
     tier = TOOL_TIERS.get(tool_name)
     if tier is None:
-        # Ungated tool
         return
     config = get_config()
     if tier not in config.permissions:
@@ -201,18 +218,26 @@ async def is_session_enabled(session: iterm2.Session) -> bool:
 # Audit logging
 # ---------------------------------------------------------------------------
 
-def audit_log(tool_name: str, params: dict[str, Any] | None = None, result: str | None = None, error: str | None = None) -> None:
-    """Append an entry to the audit log."""
+def audit_log(
+    tool_name: str,
+    params: dict[str, Any] | None = None,
+    result: str | None = None,
+    error: str | None = None,
+) -> None:
+    """Append an entry to the audit log.
+
+    Note: result text is redacted before logging, so the audit log itself
+    does not contain plaintext secrets.
+    """
     config = get_config()
     if config.audit_log is None:
         return
 
-    entry = {
+    entry: dict[str, Any] = {
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "tool": tool_name,
     }
     if params:
-        # Redact overly long text values
         sanitized = {}
         for k, v in params.items():
             if isinstance(v, str) and len(v) > 200:
@@ -221,7 +246,9 @@ def audit_log(tool_name: str, params: dict[str, Any] | None = None, result: str 
                 sanitized[k] = v
         entry["params"] = sanitized
     if result is not None:
-        entry["result"] = result[:200] if len(result) > 200 else result
+        # Redact the result before logging
+        redacted = redact_output(result)
+        entry["result"] = redacted[:200] if len(redacted) > 200 else redacted
     if error is not None:
         entry["error"] = error
 
@@ -230,4 +257,4 @@ def audit_log(tool_name: str, params: dict[str, Any] | None = None, result: str 
         with open(config.audit_log, "a") as f:
             f.write(json.dumps(entry) + "\n")
     except OSError:
-        pass  # Don't let audit failures break tool execution
+        pass
