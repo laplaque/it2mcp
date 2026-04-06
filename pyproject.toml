@@ -16,7 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
-    "pytest>=7.4.0,<9.0.0",
+    "pytest>=9.0.0,<10.0.0",
     "pytest-cov>=4.0.0,<6.0.0",
 ]
 
@@ -26,5 +26,5 @@ it2mcp = "it2mcp.server:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/it2mcp"]
 
-[tool.pytest.ini_options]
+[tool.pytest]
 testpaths = ["tests"]

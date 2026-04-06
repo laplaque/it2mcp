@@ -14,7 +14,7 @@ Built on iTerm2's official [Python API](https://iterm2.com/python-api/), it2mcp 
 ## Installation
 
 ```bash
-git clone https://github.com/youruser/it2mcp.git
+git clone https://github.com/laplaque/it2mcp.git
 cd it2mcp
 uv sync
 ```
@@ -89,6 +89,20 @@ By default, only `read` is enabled.
 ### Audit log
 
 Every tool invocation is logged to `~/.local/share/it2mcp/audit.jsonl` with timestamp, tool name, parameters, and result.
+
+### Security addons
+
+it2mcp's built-in security (session tagging + permission tiers + audit log) protects against unauthorized access. For defense in depth, two companion layers are available:
+
+| Layer | What it does | Where |
+|-------|-------------|-------|
+| **Sandbox** | Kernel-level file access restrictions via macOS `sandbox-exec` — blocks reading SSH keys, credentials, shell profiles, and secrets | [it2mcp-sandbox](https://github.com/laplaque/it2mcp-sandbox) |
+| **Secfilter** | Pluggable redaction engine that scrubs secrets from `session_read` output before the MCP client sees them | `feature/secret-redaction` branch on this fork |
+| **`env -i`** | Strips inherited environment variables to prevent leaking `GITHUB_TOKEN`, `AWS_SECRET_ACCESS_KEY`, etc. | Built into [it2mcp-sandbox](https://github.com/laplaque/it2mcp-sandbox)'s shell wrapper |
+
+The three layers handle different attack vectors: the sandbox blocks file reads, secfilter blocks output leaks, `env -i` blocks env var inheritance. Each works independently — use any combination that fits your threat model.
+
+See [it2mcp-sandbox](https://github.com/laplaque/it2mcp-sandbox) for installation and the full security model.
 
 ## Configuration
 
