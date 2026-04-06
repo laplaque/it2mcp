@@ -1,0 +1,26 @@
+# it2mcp-secfilter configuration
+#
+# Copy to ~/.config/it2mcp/config.yaml and adjust to your needs.
+# All settings are optional — defaults are shown below.
+
+permissions:
+  - read
+  - interact
+
+# Only allow sessions tagged with user.mcp_enabled = true
+require_tag: true
+
+# JSON Lines audit log (one entry per tool invocation)
+audit_log: ~/.local/share/it2mcp/audit.jsonl
+
+# Secret redaction engine
+redact:
+  enabled: true
+  replacement: "[REDACTED]"
+
+  # Disable specific built-in plugins by name:
+  #   github, gitlab, aws, generic_secrets, env_vars
+  disabled_plugins: []
+
+  # Directory for custom redaction plugins (auto-discovered *.py files)
+  custom_plugin_dir: ~/.config/it2mcp/redact-plugins/
