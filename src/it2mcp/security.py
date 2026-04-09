@@ -37,6 +37,7 @@ TOOL_TIERS: dict[str, Tier] = {
     # read
     "session_list": Tier.READ,
     "session_read": Tier.READ,
+    "session_status": Tier.READ,
     "session_get_variable": Tier.READ,
     "tab_list": Tier.READ,
     "window_list": Tier.READ,
@@ -49,6 +50,7 @@ TOOL_TIERS: dict[str, Tier] = {
     # interact
     "session_send": Tier.INTERACT,
     "session_run": Tier.INTERACT,
+    "session_interrupt": Tier.INTERACT,
     "session_split": Tier.INTERACT,
     "session_set_name": Tier.INTERACT,
     "session_set_variable": Tier.INTERACT,

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import signal
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
@@ -253,6 +255,212 @@ async def session_read(session_id: str | None = None, lines: int | None = None) 
         return result
 
     assert_permission("session_read")
+    return await _run(_impl)
+
+
+# ---------------------------------------------------------------------------
+# Session status detection (pure functions for testability)
+# ---------------------------------------------------------------------------
+
+# Common shell names for detecting idle state
+_SHELL_NAMES = frozenset({
+    "sh", "bash", "zsh", "fish", "tcsh", "csh", "ksh", "dash", "ash",
+    "-bash", "-zsh", "-fish", "-sh",  # Login shells often have leading dash
+})
+
+
+def parse_pid(pid_str: str) -> int | None:
+    """Parse a PID string to int, returning None if empty or invalid."""
+    if not pid_str:
+        return None
+    try:
+        return int(pid_str)
+    except ValueError:
+        return None
+
+
+def is_at_shell_prompt(job_name: str, job_pid: int | None, shell_pid: int | None) -> bool:
+    """Determine if the session is at a shell prompt (idle).
+
+    Returns True if:
+    - The job name (after extracting basename and stripping leading dash) is a known shell
+    - OR job_pid equals shell_pid (same process = shell is the foreground job)
+
+    Returns False otherwise (a command is running).
+    """
+    if job_name:
+        job_base = os.path.basename(job_name)
+        if job_base.lstrip("-") in _SHELL_NAMES:
+            return True
+    if job_pid is not None and shell_pid is not None and job_pid == shell_pid:
+        return True
+    return False
+
+
+def build_session_status(
+    job_name: str,
+    job_pid: int | None,
+    shell_pid: int | None,
+    tty: str,
+    command_line: str,
+) -> dict:
+    """Build the session status result dict."""
+    return {
+        "job_name": job_name,
+        "job_pid": job_pid,
+        "shell_pid": shell_pid,
+        "tty": tty,
+        "command_line": command_line,
+        "is_at_shell_prompt": is_at_shell_prompt(job_name, job_pid, shell_pid),
+    }
+
+
+class InterruptAction:
+    """Result of determining what interrupt action to take."""
+
+    __slots__ = ("action", "job_pid", "message")
+
+    # Action types
+    ETX_FALLBACK = "etx_fallback"
+    NO_OP = "no_op"
+    SIGINT = "sigint"
+
+    def __init__(self, action: str, job_pid: int | None = None, message: str = "") -> None:
+        self.action = action
+        self.job_pid = job_pid
+        self.message = message
+
+
+def determine_interrupt_action(
+    job_pid: int | None,
+    shell_pid: int | None,
+    session_id: str,
+) -> InterruptAction:
+    """Determine what action to take for session_interrupt.
+
+    Returns an InterruptAction with the action type and relevant info.
+    """
+    if job_pid is None:
+        return InterruptAction(
+            InterruptAction.ETX_FALLBACK,
+            message=f"Sent Ctrl+C to session {session_id} (no job PID available, used ETX fallback)",
+        )
+
+    if job_pid == shell_pid:
+        return InterruptAction(
+            InterruptAction.NO_OP,
+            job_pid=job_pid,
+            message=f"Session {session_id} is already at shell prompt (no foreground job to interrupt)",
+        )
+
+    return InterruptAction(
+        InterruptAction.SIGINT,
+        job_pid=job_pid,
+        message=f"Sent SIGINT to process {job_pid} in session {session_id}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Session status and interrupt MCP tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def session_status(session_id: str | None = None) -> str:
+    """Get the busy/idle status of an iTerm2 session.
+
+    Returns information about the session's current foreground job,
+    allowing callers to determine if the shell is idle at a prompt
+    or running a command.
+
+    Args:
+        session_id: Target session ID. Omit for the active session.
+
+    Returns:
+        JSON with job_name, job_pid, shell_pid, tty, and is_at_shell_prompt.
+        is_at_shell_prompt is true when the foreground job appears to be
+        the shell itself (idle), false when a command is running.
+    """
+
+    async def _impl(connection: iterm2.Connection, app: iterm2.App) -> str:
+        sessions = _resolve_sessions(app, session_id)
+        await check_sessions_allowed(sessions)
+        session = sessions[0]
+
+        # Fetch job/process info from iTerm2 session variables
+        job_name = await session.async_get_variable("jobName") or ""
+        job_pid_str = await session.async_get_variable("jobPid") or ""
+        shell_pid_str = await session.async_get_variable("pid") or ""
+        tty = await session.async_get_variable("session.tty") or ""
+        command_line = await session.async_get_variable("commandLine") or ""
+
+        # Use pure functions for parsing and status determination
+        job_pid = parse_pid(job_pid_str)
+        shell_pid = parse_pid(shell_pid_str)
+        status = build_session_status(job_name, job_pid, shell_pid, tty, command_line)
+
+        result = json.dumps(status, indent=2)
+        audit_log("session_status", {"session_id": session_id})
+        return result
+
+    assert_permission("session_status")
+    return await _run(_impl)
+
+
+@mcp.tool()
+async def session_interrupt(session_id: str | None = None) -> str:
+    """Send SIGINT (Ctrl+C) to interrupt the foreground process in a session.
+
+    This is more reliable than sending the ETX character (\\u0003) via
+    session_send, as it directly signals the foreground process group.
+
+    Args:
+        session_id: Target session ID. Omit for the active session.
+
+    Returns:
+        Status message indicating whether the interrupt was sent.
+    """
+
+    async def _impl(connection: iterm2.Connection, app: iterm2.App) -> str:
+        sessions = _resolve_sessions(app, session_id)
+        await check_sessions_allowed(sessions)
+        session = sessions[0]
+        sid = session.session_id
+
+        # Get the foreground job PID
+        job_pid_str = await session.async_get_variable("jobPid") or ""
+        shell_pid_str = await session.async_get_variable("pid") or ""
+
+        job_pid = parse_pid(job_pid_str)
+        shell_pid = parse_pid(shell_pid_str)
+
+        # Determine what action to take
+        action = determine_interrupt_action(job_pid, shell_pid, sid)
+
+        if action.action == InterruptAction.ETX_FALLBACK:
+            await session.async_send_text("\x03")
+            audit_log("session_interrupt", {"session_id": sid, "method": "etx_fallback"}, result=action.message)
+            return action.message
+
+        if action.action == InterruptAction.NO_OP:
+            audit_log("session_interrupt", {"session_id": sid, "method": "no_op"}, result=action.message)
+            return action.message
+
+        # action.action == InterruptAction.SIGINT
+        try:
+            os.kill(action.job_pid, signal.SIGINT)
+            audit_log("session_interrupt", {"session_id": sid, "job_pid": action.job_pid, "method": "sigint"}, result=action.message)
+            return action.message
+        except ProcessLookupError:
+            result = f"Process {action.job_pid} already terminated in session {sid}"
+            audit_log("session_interrupt", {"session_id": sid, "job_pid": action.job_pid, "method": "already_dead"}, result=result)
+            return result
+        except PermissionError:
+            await session.async_send_text("\x03")
+            result = f"Cannot signal process {action.job_pid} (permission denied), sent ETX to session {sid}"
+            audit_log("session_interrupt", {"session_id": sid, "job_pid": action.job_pid, "method": "etx_permission_fallback"}, result=result)
+            return result
+
+    assert_permission("session_interrupt")
     return await _run(_impl)
 
 
@@ -1093,6 +1301,64 @@ async def _b_session_read(
     return redact_output("\n".join(text_lines))
 
 
+async def _b_session_status(
+    connection: iterm2.Connection, app: iterm2.App,
+    session_id: str | None = None, **_: Any,
+) -> str:
+    assert_permission("session_status")
+    sessions = _resolve_sessions(app, session_id)
+    await check_sessions_allowed(sessions)
+    session = sessions[0]
+
+    job_name = await session.async_get_variable("jobName") or ""
+    job_pid_str = await session.async_get_variable("jobPid") or ""
+    shell_pid_str = await session.async_get_variable("pid") or ""
+    tty = await session.async_get_variable("session.tty") or ""
+    command_line = await session.async_get_variable("commandLine") or ""
+
+    job_pid = parse_pid(job_pid_str)
+    shell_pid = parse_pid(shell_pid_str)
+    status = build_session_status(job_name, job_pid, shell_pid, tty, command_line)
+
+    return json.dumps(status, indent=2)
+
+
+async def _b_session_interrupt(
+    connection: iterm2.Connection, app: iterm2.App,
+    session_id: str | None = None, **_: Any,
+) -> str:
+    assert_permission("session_interrupt")
+    sessions = _resolve_sessions(app, session_id)
+    await check_sessions_allowed(sessions)
+    session = sessions[0]
+    sid = session.session_id
+
+    job_pid_str = await session.async_get_variable("jobPid") or ""
+    shell_pid_str = await session.async_get_variable("pid") or ""
+
+    job_pid = parse_pid(job_pid_str)
+    shell_pid = parse_pid(shell_pid_str)
+
+    action = determine_interrupt_action(job_pid, shell_pid, sid)
+
+    if action.action == InterruptAction.ETX_FALLBACK:
+        await session.async_send_text("\x03")
+        return action.message
+
+    if action.action == InterruptAction.NO_OP:
+        return action.message
+
+    # action.action == InterruptAction.SIGINT
+    try:
+        os.kill(action.job_pid, signal.SIGINT)
+        return action.message
+    except ProcessLookupError:
+        return f"Process {action.job_pid} already terminated in session {sid}"
+    except PermissionError:
+        await session.async_send_text("\x03")
+        return f"Cannot signal process {action.job_pid}, sent ETX to session {sid}"
+
+
 async def _b_session_split(
     connection: iterm2.Connection, app: iterm2.App,
     vertical: bool = False, session_id: str | None = None,
@@ -1371,6 +1637,8 @@ _BATCH_HANDLERS: dict[str, Callable[..., Awaitable[str]]] = {
     "session_send": _b_session_send,
     "session_run": _b_session_run,
     "session_read": _b_session_read,
+    "session_status": _b_session_status,
+    "session_interrupt": _b_session_interrupt,
     "session_split": _b_session_split,
     "session_close": _b_session_close,
     "session_focus": _b_session_focus,
@@ -1405,12 +1673,13 @@ async def batch(operations: list[dict[str, Any]], stop_on_error: bool = False) -
 
     Args:
         operations: List of operation dicts. Each must have an "op" field.
-            Available ops: session_send, session_run, session_read, session_split,
-            session_close, session_focus, session_clear, session_set_name,
-            session_list, session_get_variable, session_set_variable,
-            session_restart, window_new, window_close, window_focus, tab_new,
-            tab_close, tab_select, tab_next, tab_prev, app_activate,
-            broadcast_on, broadcast_off, send_keystrokes, profile_apply, sleep.
+            Available ops: session_send, session_run, session_read, session_status,
+            session_interrupt, session_split, session_close, session_focus,
+            session_clear, session_set_name, session_list, session_get_variable,
+            session_set_variable, session_restart, window_new, window_close,
+            window_focus, tab_new, tab_close, tab_select, tab_next, tab_prev,
+            app_activate, broadcast_on, broadcast_off, send_keystrokes,
+            profile_apply, sleep.
 
             Sleep op: {"op": "sleep", "seconds": 0.5} or {"op": "sleep", "ms": 500}
 

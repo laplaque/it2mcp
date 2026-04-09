@@ -18,6 +18,7 @@ dependencies = [
 test = [
     "pytest>=9.0.0,<10.0.0",
     "pytest-cov>=4.0.0,<6.0.0",
+    "pytest-asyncio>=0.24.0",
 ]
 
 [project.scripts]
@@ -25,6 +26,3 @@ it2mcp = "it2mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/it2mcp"]
-
-[tool.pytest]
-testpaths = ["tests"]
