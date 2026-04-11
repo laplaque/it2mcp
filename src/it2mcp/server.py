@@ -161,12 +161,11 @@ async def _session_info(session: iterm2.Session) -> dict[str, Any]:
 async def session_list() -> str:
     """List all iTerm2 sessions with their IDs, names, titles, sizes, TTYs, and mcp_enabled status.
 
-    Shows all sessions regardless of mcp_enabled status so you can see which
-    sessions need to be tagged. Only mcp_enabled sessions can be targeted by
-    other tools.
+    Shows all sessions regardless of mcp_enabled status. Only mcp_enabled
+    sessions can be targeted by other tools.
 
-    To enable a session for MCP access, run in that session's terminal:
-        it2 session set-var user.mcp_enabled true
+    Sessions are enabled automatically when created via tab_new or window_new
+    (which always use the 'MCP Sandboxed' profile).
     """
     assert_permission("session_list")
 
@@ -624,29 +623,6 @@ async def session_get_variable(variable: str, session_id: str | None = None) -> 
     return await _run(_impl)
 
 
-@mcp.tool()
-async def session_set_variable(variable: str, value: str, session_id: str | None = None) -> str:
-    """Set the value of an iTerm2 session variable.
-
-    Args:
-        variable: The variable name.
-        value: The value to set.
-        session_id: Target session ID. Omit for the active session.
-    """
-
-    async def _impl(connection: iterm2.Connection, app: iterm2.App) -> str:
-        sessions = _resolve_sessions(app, session_id)
-        await check_sessions_allowed(sessions)
-        target = sessions[0]
-        await target.async_set_variable(variable, value)
-        result = f"Set {variable} = {value}"
-        audit_log("session_set_variable", {"variable": variable, "value": value, "session_id": session_id}, result=result)
-        return result
-
-    assert_permission("session_set_variable")
-    return await _run(_impl)
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # WINDOW TOOLS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -674,17 +650,18 @@ async def window_list() -> str:
 
 
 @mcp.tool()
-async def window_new(profile: str | None = None, command: str | None = None) -> str:
-    """Create a new iTerm2 window.
+async def window_new(command: str | None = None) -> str:
+    """Create a new iTerm2 window with the 'MCP Sandboxed' profile.
+
+    The session is automatically MCP-enabled on startup.
 
     Args:
-        profile: Profile name to use. Omit for the default profile.
         command: Command to run in the new window.
     """
 
     async def _impl(connection: iterm2.Connection, app: iterm2.App) -> str:
         window = await iterm2.Window.async_create(
-            connection, profile=profile, command=command  # type: ignore[arg-type]
+            connection, profile="MCP Sandboxed", command=command  # type: ignore[arg-type]
         )
         if window:
             return json.dumps({"window_id": window.window_id})
@@ -874,21 +851,21 @@ async def tab_list(window_id: str | None = None) -> str:
 
 @mcp.tool()
 async def tab_new(
-    profile: str | None = None,
     window_id: str | None = None,
     command: str | None = None,
 ) -> str:
-    """Create a new tab in an iTerm2 window.
+    """Create a new tab in an iTerm2 window with the 'MCP Sandboxed' profile.
+
+    The session is automatically MCP-enabled on startup.
 
     Args:
-        profile: Profile name for the new tab.
         window_id: Window ID to create the tab in. Omit for the current window.
         command: Command to run in the new tab.
     """
 
     async def _impl(connection: iterm2.Connection, app: iterm2.App) -> str:
         window = _find_window(app, window_id)
-        tab = await window.async_create_tab(profile=profile)
+        tab = await window.async_create_tab(profile="MCP Sandboxed")
         if tab:
             if command:
                 session = tab.current_session
@@ -1437,10 +1414,10 @@ async def _b_session_list(
 
 async def _b_window_new(
     connection: iterm2.Connection, app: iterm2.App,
-    profile: str | None = None, command: str | None = None, **_: Any,
+    command: str | None = None, **_: Any,
 ) -> str:
     window = await iterm2.Window.async_create(
-        connection, profile=profile, command=command  # type: ignore[arg-type]
+        connection, profile="MCP Sandboxed", command=command  # type: ignore[arg-type]
     )
     if window:
         return json.dumps({"window_id": window.window_id})
@@ -1468,11 +1445,11 @@ async def _b_window_focus(
 
 async def _b_tab_new(
     connection: iterm2.Connection, app: iterm2.App,
-    profile: str | None = None, window_id: str | None = None,
+    window_id: str | None = None,
     command: str | None = None, **_: Any,
 ) -> str:
     window = _find_window(app, window_id)
-    tab = await window.async_create_tab(profile=profile)
+    tab = await window.async_create_tab(profile="MCP Sandboxed")
     if tab:
         if command:
             session = tab.current_session
@@ -1591,17 +1568,6 @@ async def _b_session_get_variable(
     return f"Variable '{variable}' not set"
 
 
-async def _b_session_set_variable(
-    connection: iterm2.Connection, app: iterm2.App,
-    variable: str, value: str, session_id: str | None = None, **_: Any,
-) -> str:
-    assert_permission("session_set_variable")
-    sessions = _resolve_sessions(app, session_id)
-    await check_sessions_allowed(sessions)
-    await sessions[0].async_set_variable(variable, value)
-    return f"Set {variable} = {value}"
-
-
 async def _b_session_restart(
     connection: iterm2.Connection, app: iterm2.App,
     session_id: str | None = None, **_: Any,
@@ -1658,7 +1624,6 @@ _BATCH_HANDLERS: dict[str, Callable[..., Awaitable[str]]] = {
     "broadcast_off": _b_broadcast_off,
     "send_keystrokes": _b_send_keystrokes,
     "session_get_variable": _b_session_get_variable,
-    "session_set_variable": _b_session_set_variable,
     "session_restart": _b_session_restart,
     "profile_apply": _b_profile_apply,
 }
@@ -1676,7 +1641,7 @@ async def batch(operations: list[dict[str, Any]], stop_on_error: bool = False) -
             Available ops: session_send, session_run, session_read, session_status,
             session_interrupt, session_split, session_close, session_focus,
             session_clear, session_set_name, session_list, session_get_variable,
-            session_set_variable, session_restart, window_new, window_close,
+            session_restart, window_new, window_close,
             window_focus, tab_new, tab_close, tab_select, tab_next, tab_prev,
             app_activate, broadcast_on, broadcast_off, send_keystrokes,
             profile_apply, sleep.

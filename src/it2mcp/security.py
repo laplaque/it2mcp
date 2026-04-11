@@ -53,7 +53,6 @@ TOOL_TIERS: dict[str, Tier] = {
     "session_interrupt": Tier.INTERACT,
     "session_split": Tier.INTERACT,
     "session_set_name": Tier.INTERACT,
-    "session_set_variable": Tier.INTERACT,
     "session_clear": Tier.INTERACT,
     "session_focus": Tier.INTERACT,
     "tab_new": Tier.INTERACT,

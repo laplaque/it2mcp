@@ -54,9 +54,11 @@ it2mcp ships **secure by default**. Two mechanisms protect your terminal session
 
 ### Session tagging
 
-Sessions must be explicitly tagged before MCP can interact with them. Untagged sessions are invisible to all tools except `session_list` (which shows their `mcp_enabled` status so you know what to tag).
+Sessions must be explicitly tagged before MCP can interact with them. Untagged sessions are invisible to all tools except `session_list` (which shows their `mcp_enabled` status).
 
-**Tag a session** (run this in the session's terminal):
+When using `tab_new` or `window_new`, the "MCP Sandboxed" profile is always used. This profile's shell script auto-tags the session on startup — no manual tagging is needed.
+
+For sessions created outside of MCP (e.g. manually opened tabs), tag them from within the session's terminal:
 
 ```bash
 # Using the it2 CLI
@@ -81,7 +83,7 @@ Tools are grouped into three tiers:
 | Tier | Tools | Description |
 |------|-------|-------------|
 | **read** | `session_list`, `session_read`, `session_get_variable`, `tab_list`, `window_list`, `app_get_focus`, `profile_list`, `profile_show`, `app_version`, `app_theme`, `window_arrange_list` | Observation only |
-| **interact** | `session_send`, `session_run`, `session_split`, `session_clear`, `session_focus`, `session_set_name`, `session_set_variable`, `tab_new`, `tab_select`, `tab_next`, `tab_prev`, `tab_move`, `window_new`, `window_focus`, `window_move`, `window_resize`, `window_fullscreen`, `window_arrange_save`, `window_arrange_restore`, `app_activate`, `broadcast_on`, `broadcast_off`, `broadcast_add`, `profile_apply`, `batch`, `send_keystrokes` | Can send input and modify layout |
+| **interact** | `session_send`, `session_run`, `session_split`, `session_clear`, `session_focus`, `session_set_name`, `tab_new`, `tab_select`, `tab_next`, `tab_prev`, `tab_move`, `window_new`, `window_focus`, `window_move`, `window_resize`, `window_fullscreen`, `window_arrange_save`, `window_arrange_restore`, `app_activate`, `broadcast_on`, `broadcast_off`, `broadcast_add`, `profile_apply`, `batch`, `send_keystrokes` | Can send input and modify layout |
 | **destructive** | `session_close`, `session_restart`, `tab_close`, `window_close` | Can terminate sessions and close windows |
 
 By default, only `read` is enabled.
@@ -139,7 +141,6 @@ Override the config path with the `IT2MCP_CONFIG` environment variable.
 | `session_clear` | interact | Clear screen (Ctrl+L) |
 | `session_focus` | interact | Activate a specific session |
 | `session_set_name` | interact | Set session name |
-| `session_set_variable` | interact | Set a session variable |
 | `session_close` | destructive | Close a session |
 | `session_restart` | destructive | Restart a session |
 
