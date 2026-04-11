@@ -1,0 +1,248 @@
+; iterm-sandbox.sb — macOS sandbox profile for iTerm MCP shell sessions
+; Denies access to sensitive profile/config files and common bypass vectors
+;
+; Install: cp iterm-sandbox.sb ~/.config/iterm-sandbox.sb
+; Use:     sandbox-exec -f ~/.config/iterm-sandbox.sb /bin/zsh --no-rcs
+;
+; NOTE: sandbox-exec regex is extremely limited.
+;       No *, ?, +, or () grouping. Only literals, ., ^, $, [...], and | work.
+;       All patterns must be expanded into explicit alternatives.
+;
+; RULE ORDER: sandbox-exec uses first-match-wins. Allow rules must appear
+; BEFORE deny rules that would otherwise catch the same paths.
+;
+; PATH RESOLUTION: macOS /etc is a symlink to /private/etc. sandbox-exec
+; resolves symlinks, so rules must use /private/etc for literal paths.
+; Both forms are included where needed for safety.
+
+(version 1)
+
+; ── Start with permissive default ──────────────────────────────────
+(allow default)
+
+; ── DENY: Shell profile / rc files ─────────────────────────────────
+; Prevents reading login scripts that could leak secrets or be used
+; to hijack the shell environment.
+(deny file-read* file-write*
+  (literal "/etc/profile")
+  (literal "/etc/bashrc")
+  (literal "/etc/zshrc")
+  (literal "/etc/zprofile")
+  (literal "/etc/zshenv")
+  (literal "/etc/zlogin")
+  (literal "/etc/zlogout")
+  (literal "/private/etc/profile")
+  (literal "/private/etc/bashrc")
+  (literal "/private/etc/zshrc")
+  (literal "/private/etc/zprofile")
+  (literal "/private/etc/zshenv")
+  (literal "/private/etc/zlogin")
+  (literal "/private/etc/zlogout")
+  (regex #"^/Users/[^/]+/\.bash_profile$")
+  (regex #"^/Users/[^/]+/\.bashrc$")
+  (regex #"^/Users/[^/]+/\.profile$")
+  (regex #"^/Users/[^/]+/\.zshrc$")
+  (regex #"^/Users/[^/]+/\.zprofile$")
+  (regex #"^/Users/[^/]+/\.zshenv$")
+  (regex #"^/Users/[^/]+/\.zlogin$")
+  (regex #"^/Users/[^/]+/\.zlogout$")
+  (regex #"^/Users/[^/]+/\.login$")
+  (regex #"^/Users/[^/]+/\.logout$")
+)
+
+; ── DENY: Claude / AI configuration ───────────────────────────────
+; Claude Desktop config, API keys, MCP server definitions
+(deny file-read* file-write*
+  (regex #"^/Users/[^/]+/Library/Application Support/Claude")
+  (regex #"^/Users/[^/]+/\.claude(/|$)")
+  (regex #"^/Users/[^/]+/\.claude\.json$")
+)
+
+; ── DENY: SSH / GPG / credential stores ───────────────────────────
+; SSH: targeted denies for private key files only. ~/.ssh/config and
+; ~/.ssh/known_hosts remain readable so git and ssh can connect.
+; Tool configs like ~/.config/gh/ are NOT denied here — gh needs read
+; access to function. The sandbox blocks raw secret files; secfilter
+; handles any secrets that appear in terminal output.
+(deny file-read* file-write*
+  (regex #"^/Users/[^/]+/\.ssh/id_")
+  (regex #"^/Users/[^/]+/\.ssh/.*\.pem$")
+  (regex #"^/Users/[^/]+/\.ssh/authorized_keys")
+  (regex #"^/Users/[^/]+/\.gnupg(/|$)")
+  (regex #"^/Users/[^/]+/\.aws(/|$)")
+  (regex #"^/Users/[^/]+/\.netrc$")
+)
+
+; ── Keychain: allow access for tool authentication ────────────────
+; Tools like gh, git, and ssh-agent access the Keychain via
+; /usr/bin/security (called by Go's keyring library, git credential
+; helpers, etc.). This is allowed so tools can authenticate normally.
+; Secfilter handles any secrets that appear in terminal output.
+;
+; Keychain file-level deny is intentionally removed. The previous
+; blanket deny on ~/Library/Keychains and /Library/Keychains blocked
+; framework-level access too, preventing gh from authenticating.
+
+; ── DENY: Environment / dotenv files anywhere ─────────────────────
+; Catches .env and .env.* (e.g. .env.local, .env.production)
+(deny file-read* file-write*
+  (regex #"/\.env$")
+  (regex #"/\.env\.")
+)
+
+; ── DENY: Secret & credential files (catch-all) ──────────────────
+; Directories and files named exactly secret, credential, token, password, passwd.
+; Uses (/|$) to match directory boundaries — avoids false positives on compound
+; words like "tokenizer" or "secretary".
+(deny file-read* file-write*
+  (regex #"/secret(/|$)")
+  (regex #"/credential(/|$)")
+  (regex #"/token(/|$)")
+  (regex #"/password(/|$)")
+  (regex #"/passwd(/|$)")
+)
+
+; ── ALLOW: System CA certificates (must come BEFORE .pem deny) ────
+; git, curl, and other HTTPS tools need the system CA bundle for TLS
+; verification. The .pem deny below would catch these without this
+; explicit allow. First-match-wins: this allow takes priority.
+; Both /etc and /private/etc forms are needed — macOS /etc is a
+; symlink to /private/etc, and sandbox-exec resolves symlinks.
+(allow file-read*
+  (literal "/etc/ssl/cert.pem")
+  (literal "/private/etc/ssl/cert.pem")
+  (subpath "/etc/ssl/certs")
+  (subpath "/private/etc/ssl/certs")
+  (literal "/opt/homebrew/etc/openssl/cert.pem")
+  (subpath "/opt/homebrew/etc/openssl/certs")
+  (subpath "/opt/homebrew/etc/ca-certificates")
+)
+
+; Common secret file patterns anywhere on disk
+(deny file-read* file-write*
+  ; Private keys (PEM, P12, PKCS8, JKS, etc.)
+  (regex #"\.(pem|key|p12|pfx|pkcs12|pkcs8|jks|keystore)$")
+  ; Certificate authority private material
+  (regex #"/(ca-key|privkey|server-key|client-key)\.")
+  ; API key / token files
+  (regex #"/\.api[-_]key")
+  (regex #"/\.apikeys$")
+  (regex #"/\.token$")
+  ; Terraform secrets
+  (regex #"\.tfvars$")
+  (regex #"/(terraform\.tfstate|terraform\.tfstate\.backup)$")
+  ; Docker secrets
+  (regex #"/\.dockercfg$")
+  (regex #"/\.docker/config\.json$")
+  ; Kubernetes configs
+  (regex #"/\.kube(/|$)")
+  ; npm/yarn/pip tokens
+  (regex #"/\.npmrc$")
+  (regex #"/\.yarnrc$")
+  (regex #"/\.pypirc$")
+  ; Ruby / Bundler credentials
+  (regex #"/\.gem/credentials$")
+  ; Ansible vault files
+  (regex #"/vault\.yaml$")
+  (regex #"/vault\.yml$")
+  (regex #"/\.vault[-_]pass")
+  ; Age / SOPS encryption keys
+  (regex #"/\.age(/|$)")
+  (regex #"/\.sops\.yaml$")
+  (regex #"/\.sops\.yml$")
+  ; 1Password / Bitwarden / KeePass CLI configs
+  (regex #"/\.op(/|$)")
+  (regex #"/\.bw-session$")
+  (regex #"\.(kdbx|kdb)$")
+  ; Cloud provider configs (read + write denied)
+  (regex #"^/Users/[^/]+/\.config/gcloud(/|$)")
+  (regex #"^/Users/[^/]+/\.azure(/|$)")
+  (regex #"^/Users/[^/]+/\.oci(/|$)")
+  (regex #"^/Users/[^/]+/\.digitalocean$")
+  (regex #"^/Users/[^/]+/\.config/heroku(/|$)")
+  (regex #"^/Users/[^/]+/\.config/netlify(/|$)")
+  (regex #"^/Users/[^/]+/\.config/vercel(/|$)")
+  (regex #"^/Users/[^/]+/\.config/stripe(/|$)")
+  (regex #"^/Users/[^/]+/\.config/fly(/|$)")
+  ; Git credential store
+  (regex #"/\.git-credentials$")
+  ; History files (can leak secrets typed in shells)
+  (regex #"^/Users/[^/]+/\.bash_history$")
+  (regex #"^/Users/[^/]+/\.zsh_history$")
+  (regex #"^/Users/[^/]+/\.sh_history$")
+  (regex #"^/Users/[^/]+/\.lesshst$")
+  (regex #"^/Users/[^/]+/\.python_history$")
+  (regex #"^/Users/[^/]+/\.node_repl_history$")
+  (regex #"^/Users/[^/]+/\.psql_history$")
+  (regex #"^/Users/[^/]+/\.mysql_history$")
+  (regex #"^/Users/[^/]+/\.rediscli_history$")
+)
+
+; ── ANTI-BYPASS: ~/.config is write-protected ─────────────────────
+; Sandboxed sessions must not modify anything under ~/.config.
+; This protects the sandbox profile, shell wrapper, it2mcp config,
+; env passthrough, redact plugins, and all app configs.
+; Read access is selectively allowed (e.g. env-passthrough.conf)
+; so sandboxed-shell.sh can function.
+; Deployment of config files is strictly from unsandboxed shells only.
+(deny file-write*
+  (regex #"^/Users/[^/]+/\.config(/|$)")
+)
+
+; ── ANTI-BYPASS: iTerm2 config is write-protected ─────────────────
+; Prevents sandboxed sessions from tampering with Dynamic Profiles,
+; scripts, or other iTerm2 configuration. A modified Dynamic Profile
+; could point the "MCP Sandboxed" profile at an unsandboxed shell.
+(deny file-write*
+  (regex #"^/Users/[^/]+/Library/Application Support/iTerm2(/|$)")
+)
+
+; ── ANTI-BYPASS: Block reading sandbox infrastructure ─────────────
+; The sandbox profile and shell wrapper are not readable from within.
+; This prevents a sandboxed session from inspecting the deny rules or
+; the env passthrough logic to probe for gaps.
+;
+; NOTE: Only the deployed copies under ~/.config are denied, not repo
+; copies elsewhere on disk. The repo is public source — the threat model
+; is preventing real-time inspection of the active ruleset, not hiding
+; publicly available code. A broad catch-all pattern was intentionally
+; removed because it blocked legitimate git operations on the repo.
+(deny file-read*
+  (regex #"^/Users/[^/]+/\.config/iterm-sandbox\.sb$")
+  (regex #"^/Users/[^/]+/\.config/sandboxed-shell\.sh$")
+  ; it2mcp config, env-passthrough, custom redact plugins
+  (regex #"^/Users/[^/]+/\.config/it2mcp(/|$)")
+)
+
+; ── ANTI-BYPASS: Block /dev/mem, /dev/kmem (kernel memory) ────────
+(deny file-read* file-write*
+  (literal "/dev/mem")
+  (literal "/dev/kmem")
+)
+
+; ── ANTI-BYPASS: Block ptrace (process tracing/debugging) ─────────
+; Prevents attaching to other processes to read their memory/env
+(deny process-exec
+  (literal "/usr/bin/lldb")
+  (literal "/usr/bin/dtrace")
+  (literal "/usr/bin/sample")
+  (literal "/usr/bin/leaks")
+)
+
+; ── ANTI-BYPASS: Block modifying sandbox / security settings ──────
+(deny file-write*
+  (subpath "/usr/local/etc")
+  (subpath "/etc")
+  (subpath "/private/etc")
+)
+
+; ── NOTE: process-info-pidinfo intentionally NOT denied ───────────
+; zsh requires it for job control. Denying it causes SIGTRAP (exit 133).
+; Mitigated by it2mcp's session tagging which prevents interaction
+; with untagged sessions.
+
+; ── ANTI-BYPASS: Block launching sandbox-exec itself ──────────────
+; Prevents escaping into an unrestricted sandbox
+(deny process-exec
+  (literal "/usr/bin/sandbox-exec")
+)
