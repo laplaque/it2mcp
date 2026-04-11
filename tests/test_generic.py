@@ -95,13 +95,71 @@ class TestTwilio:
 
 
 class TestPEM:
-    def test_pem_private_key_header(self, plugin: GenericSecretsPlugin) -> None:
-        text = "-----BEGIN RSA PRIVATE KEY-----"
-        assert "PRIVATE KEY" not in plugin.redact(text)
+    def test_pem_rsa_full_block(self, plugin: GenericSecretsPlugin) -> None:
+        text = (
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            "MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF9PbnGcY\n"
+            "7GkmUVhOv/eN3MIWEg==\n"
+            "-----END RSA PRIVATE KEY-----"
+        )
+        result = plugin.redact(text)
+        assert "MIIEpA" not in result
+        assert "PRIVATE KEY" not in result
 
-    def test_pem_ec_private_key(self, plugin: GenericSecretsPlugin) -> None:
-        text = "-----BEGIN EC PRIVATE KEY-----"
-        assert "PRIVATE KEY" not in plugin.redact(text)
+    def test_pem_ec_full_block(self, plugin: GenericSecretsPlugin) -> None:
+        text = (
+            "-----BEGIN EC PRIVATE KEY-----\n"
+            "MHQCAQEEIBkg0K3n5wPsTEfy8bR2KU\n"
+            "-----END EC PRIVATE KEY-----"
+        )
+        result = plugin.redact(text)
+        assert "MHQCAQEEIBkg" not in result
+
+    def test_openssh_full_block(self, plugin: GenericSecretsPlugin) -> None:
+        text = (
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+            "b3BlbnNzaC1rZXktdjEAAAAABG5vbmU\n"
+            "-----END OPENSSH PRIVATE KEY-----"
+        )
+        result = plugin.redact(text)
+        assert "b3Blbn" not in result
+
+    def test_encrypted_private_key(self, plugin: GenericSecretsPlugin) -> None:
+        text = (
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\n"
+            "MIIFHDBOBgkqhkiG9w0BBQ0wQTApBg\n"
+            "-----END ENCRYPTED PRIVATE KEY-----"
+        )
+        result = plugin.redact(text)
+        assert "MIIFHDBOBg" not in result
+
+    def test_dsa_private_key(self, plugin: GenericSecretsPlugin) -> None:
+        text = (
+            "-----BEGIN DSA PRIVATE KEY-----\n"
+            "MIIBugIBAAKBgQC3teJGAD0t\n"
+            "-----END DSA PRIVATE KEY-----"
+        )
+        result = plugin.redact(text)
+        assert "MIIBug" not in result
+
+    def test_pem_header_only_still_redacted(self, plugin: GenericSecretsPlugin) -> None:
+        """Even a header without a matching END should be caught."""
+        text = "found key: -----BEGIN RSA PRIVATE KEY-----"
+        result = plugin.redact(text)
+        assert "PRIVATE KEY" not in result
+
+    def test_key_embedded_in_text(self, plugin: GenericSecretsPlugin) -> None:
+        text = (
+            "Config loaded.\n"
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            "MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF9PbnGcY\n"
+            "-----END RSA PRIVATE KEY-----\n"
+            "Server started on port 8080."
+        )
+        result = plugin.redact(text)
+        assert "MIIEpA" not in result
+        assert "Config loaded." in result
+        assert "Server started" in result
 
 
 class TestPassthrough:

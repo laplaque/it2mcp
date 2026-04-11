@@ -19,7 +19,8 @@ class GenericSecretsPlugin(RedactPlugin):
         - Stripe keys: sk_live_, sk_test_, rk_live_, rk_test_
         - SendGrid: SG.xxxx
         - Twilio: SK + 32 hex chars
-        - Generic private keys in output: -----BEGIN ... PRIVATE KEY-----
+        - Private key blocks: full PEM/OpenSSH key blocks (header + body + footer)
+        - Standalone private key headers (when END marker is absent or truncated)
     """
 
     @property
@@ -28,7 +29,7 @@ class GenericSecretsPlugin(RedactPlugin):
 
     @property
     def description(self) -> str:
-        return "Generic secret patterns: JWTs, bearer tokens, common API key formats"
+        return "Generic secret patterns: JWTs, bearer tokens, common API key formats, private key blocks"
 
     def patterns(self) -> list[re.Pattern[str]]:
         return [
@@ -49,6 +50,16 @@ class GenericSecretsPlugin(RedactPlugin):
             re.compile(r"SG\.[A-Za-z0-9_\-]{22,}\.[A-Za-z0-9_\-]{22,}"),
             # Twilio
             re.compile(r"SK[0-9a-fA-F]{32}"),
-            # PEM private key blocks
+            # Full PEM/OpenSSH private key blocks (header + base64 body + footer)
+            # Must come before the standalone header pattern so full blocks are
+            # replaced as a unit rather than leaving the body exposed.
+            re.compile(
+                r"-----BEGIN\s[A-Z\s]*PRIVATE\sKEY-----"
+                r"[\s\S]*?"
+                r"-----END\s[A-Z\s]*PRIVATE\sKEY-----",
+                re.MULTILINE,
+            ),
+            # Standalone private key header (fallback for truncated output
+            # where the END marker is absent)
             re.compile(r"-----BEGIN\s[A-Z\s]*PRIVATE\sKEY-----"),
         ]

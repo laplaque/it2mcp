@@ -24,6 +24,7 @@ def _load_builtins() -> None:
     from .builtin.aws import AWSPlugin
     from .builtin.generic import GenericSecretsPlugin
     from .builtin.env_vars import EnvVarsPlugin
+    from .builtin.cloud_cli import CloudCLIPlugin
 
     _BUILTIN_PLUGINS.extend([
         GitHubPlugin,
@@ -31,6 +32,7 @@ def _load_builtins() -> None:
         AWSPlugin,
         GenericSecretsPlugin,
         EnvVarsPlugin,
+        CloudCLIPlugin,
     ])
 
 
