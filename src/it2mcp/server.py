@@ -16,6 +16,7 @@ from typing import Any, TypeVar
 import iterm2
 from mcp.server.fastmcp import FastMCP
 
+from .gate import gate_command
 from .security import (
     Tier,
     assert_permission,
@@ -206,6 +207,7 @@ async def session_send(text: str, session_id: str | None = None, all_sessions: b
         return result
 
     assert_permission("session_send")
+    await gate_command(text)
     return await _run(_impl)
 
 
@@ -229,6 +231,7 @@ async def session_run(command: str, session_id: str | None = None, all_sessions:
         return result
 
     assert_permission("session_run")
+    await gate_command(command)
     return await _run(_impl)
 
 
@@ -385,14 +388,12 @@ async def session_status(session_id: str | None = None) -> str:
         await check_sessions_allowed(sessions)
         session = sessions[0]
 
-        # Fetch job/process info from iTerm2 session variables
         job_name = await session.async_get_variable("jobName") or ""
         job_pid_str = await session.async_get_variable("jobPid") or ""
         shell_pid_str = await session.async_get_variable("pid") or ""
         tty = await session.async_get_variable("session.tty") or ""
         command_line = await session.async_get_variable("commandLine") or ""
 
-        # Use pure functions for parsing and status determination
         job_pid = parse_pid(job_pid_str)
         shell_pid = parse_pid(shell_pid_str)
         status = build_session_status(job_name, job_pid, shell_pid, tty, command_line)
@@ -425,14 +426,12 @@ async def session_interrupt(session_id: str | None = None) -> str:
         session = sessions[0]
         sid = session.session_id
 
-        # Get the foreground job PID
         job_pid_str = await session.async_get_variable("jobPid") or ""
         shell_pid_str = await session.async_get_variable("pid") or ""
 
         job_pid = parse_pid(job_pid_str)
         shell_pid = parse_pid(shell_pid_str)
 
-        # Determine what action to take
         action = determine_interrupt_action(job_pid, shell_pid, sid)
 
         if action.action == InterruptAction.ETX_FALLBACK:
@@ -444,7 +443,6 @@ async def session_interrupt(session_id: str | None = None) -> str:
             audit_log("session_interrupt", {"session_id": sid, "method": "no_op"}, result=action.message)
             return action.message
 
-        # action.action == InterruptAction.SIGINT
         try:
             os.kill(action.job_pid, signal.SIGINT)
             audit_log("session_interrupt", {"session_id": sid, "job_pid": action.job_pid, "method": "sigint"}, result=action.message)
@@ -667,6 +665,8 @@ async def window_new(command: str | None = None) -> str:
             return json.dumps({"window_id": window.window_id})
         raise RuntimeError("Failed to create window")
 
+    if command:
+        await gate_command(command)
     return await _run(_impl)
 
 
@@ -874,6 +874,8 @@ async def tab_new(
             return json.dumps({"tab_id": tab.tab_id})
         raise RuntimeError("Failed to create tab")
 
+    if command:
+        await gate_command(command)
     return await _run(_impl)
 
 
@@ -1183,8 +1185,6 @@ async def profile_apply(name: str, session_id: str | None = None) -> str:
 # BATCH TOOL
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Maps operation names to the async functions that implement them, plus their
-# parameter specs so the batch executor can route correctly.
 _BATCH_OPS: dict[str, Callable[..., Awaitable[str]]] = {}
 
 
@@ -1192,58 +1192,12 @@ def _register_batch_op(name: str, func: Callable[..., Awaitable[Any]]) -> None:
     _BATCH_OPS[name] = func
 
 
-async def _batch_run_impl(
-    connection: iterm2.Connection,
-    app: iterm2.App,
-    operations: list[dict[str, Any]],
-) -> str:
-    """Execute a sequence of operations within a single iTerm2 connection."""
-    results: list[dict[str, Any]] = []
-
-    for i, op in enumerate(operations):
-        op_type = op.get("op")
-        if not op_type:
-            results.append({"index": i, "error": "missing 'op' field"})
-            continue
-
-        # Sleep is a special built-in operation
-        if op_type == "sleep":
-            duration = op.get("seconds", op.get("ms", 0))
-            if "ms" in op and "seconds" not in op:
-                duration = op["ms"] / 1000.0
-            await asyncio.sleep(float(duration))
-            results.append({"index": i, "op": "sleep", "result": f"slept {duration}s"})
-            continue
-
-        # Look up the operation handler
-        handler = _BATCH_HANDLERS.get(op_type)
-        if not handler:
-            results.append({"index": i, "op": op_type, "error": f"unknown operation '{op_type}'"})
-            continue
-
-        # Extract params (everything except "op")
-        params = {k: v for k, v in op.items() if k != "op"}
-
-        try:
-            result = await handler(connection=connection, app=app, **params)
-            results.append({"index": i, "op": op_type, "result": result})
-        except Exception as e:
-            results.append({"index": i, "op": op_type, "error": str(e)})
-            # Check if the caller wants to stop on error
-            if op.get("stop_on_error", False):
-                results.append({"index": i + 1, "error": "batch aborted due to stop_on_error"})
-                break
-
-    return json.dumps(results, indent=2)
-
-
-# --- Batch handler implementations (take connection+app directly) ---
-
 async def _b_session_send(
     connection: iterm2.Connection, app: iterm2.App,
     text: str, session_id: str | None = None, all_sessions: bool = False, **_: Any,
 ) -> str:
     assert_permission("session_send")
+    await gate_command(text)
     sessions = _resolve_sessions(app, session_id, all_sessions)
     await check_sessions_allowed(sessions)
     for s in sessions:
@@ -1256,6 +1210,7 @@ async def _b_session_run(
     command: str, session_id: str | None = None, all_sessions: bool = False, **_: Any,
 ) -> str:
     assert_permission("session_run")
+    await gate_command(command)
     sessions = _resolve_sessions(app, session_id, all_sessions)
     await check_sessions_allowed(sessions)
     for s in sessions:
@@ -1325,7 +1280,6 @@ async def _b_session_interrupt(
     if action.action == InterruptAction.NO_OP:
         return action.message
 
-    # action.action == InterruptAction.SIGINT
     try:
         os.kill(action.job_pid, signal.SIGINT)
         return action.message
@@ -1416,6 +1370,8 @@ async def _b_window_new(
     connection: iterm2.Connection, app: iterm2.App,
     command: str | None = None, **_: Any,
 ) -> str:
+    if command:
+        await gate_command(command)
     window = await iterm2.Window.async_create(
         connection, profile="MCP Sandboxed", command=command  # type: ignore[arg-type]
     )
@@ -1448,6 +1404,8 @@ async def _b_tab_new(
     window_id: str | None = None,
     command: str | None = None, **_: Any,
 ) -> str:
+    if command:
+        await gate_command(command)
     window = _find_window(app, window_id)
     tab = await window.async_create_tab(profile="MCP Sandboxed")
     if tab:
@@ -1548,7 +1506,6 @@ async def _b_send_keystrokes(
     assert_permission("send_keystrokes")
     sessions = _resolve_sessions(app, session_id)
     await check_sessions_allowed(sessions)
-    # Decode common escape sequences
     decoded = keys.encode("utf-8").decode("unicode_escape")
     for s in sessions:
         await s.async_send_text(decoded)

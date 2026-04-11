@@ -1,4 +1,4 @@
-# it2mcp-secfilter configuration
+# it2mcp configuration
 #
 # Copy to ~/.config/it2mcp/config.yaml and adjust to your needs.
 # All settings are optional — defaults are shown below.
@@ -13,13 +13,53 @@ require_tag: true
 # JSON Lines audit log (one entry per tool invocation)
 audit_log: ~/.local/share/it2mcp/audit.jsonl
 
+# Command confirmation gate
+# Controls which commands can be executed via session_run, session_send,
+# tab_new (with command), and window_new (with command).
+commands:
+  enabled: true
+  timeout: 30  # seconds before auto-deny
+
+  # Commands matching these patterns execute without confirmation.
+  # Supports exact match ("pwd") and wildcards ("git *").
+  allow:
+    - "git *"
+    - "ls *"
+    - "cat *"
+    - "echo *"
+    - "pwd"
+    - "which *"
+    - "go test *"
+    - "go build *"
+    - "uv *"
+    - "make *"
+    - "grep *"
+    - "find *"
+    - "head *"
+    - "tail *"
+    - "wc *"
+    - "diff *"
+    - "mkdir *"
+
+  # Commands matching these patterns are rejected immediately.
+  deny:
+    - "sudo *"
+    - "ssh *"
+    - "scp *"
+    - "gh auth *"
+    - "glab auth *"
+    - "gcloud auth *"
+    - "az account get-access-token*"
+
+  # Everything else triggers a macOS confirmation dialog.
+
 # Secret redaction engine
 redact:
   enabled: true
   replacement: "[REDACTED]"
 
   # Disable specific built-in plugins by name:
-  #   github, gitlab, aws, generic_secrets, env_vars
+  #   github, gitlab, aws, generic_secrets, env_vars, cloud_cli
   disabled_plugins: []
 
   # Directory for custom redaction plugins (auto-discovered *.py files)

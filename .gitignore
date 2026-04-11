@@ -8,3 +8,4 @@ build/
 htmlcov/
 CLAUDE.md
 .idea/
+config/config.yaml

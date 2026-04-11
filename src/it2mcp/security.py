@@ -3,6 +3,7 @@
 Provides:
 - Permission tiers (read, interact, destructive)
 - Session tag gating (user.mcp_enabled)
+- Command gate configuration (allow/deny/ask)
 - Audit logging
 - Config file loading
 - Secret redaction engine (pluggable)
@@ -83,6 +84,18 @@ TOOL_TIERS: dict[str, Tier] = {
 
 
 # ---------------------------------------------------------------------------
+# Default command gate lists
+# ---------------------------------------------------------------------------
+
+_DEFAULT_COMMANDS: dict[str, Any] = {
+    "enabled": True,
+    "timeout": 30,
+    "allow": [],
+    "deny": [],
+}
+
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -99,6 +112,7 @@ class Config:
         self.require_tag: bool = True
         self.audit_log: Path | None = _DEFAULT_AUDIT_PATH
         self.redact_engine: RedactEngine = RedactEngine(enabled=True)
+        self.commands: dict[str, Any] = dict(_DEFAULT_COMMANDS)
         self._raw: dict[str, Any] = {}
 
     @classmethod
@@ -138,6 +152,16 @@ class Config:
                 config.audit_log = None
             else:
                 config.audit_log = Path(data["audit_log"]).expanduser()
+
+        # commands (gate)
+        if "commands" in data and isinstance(data["commands"], dict):
+            cmd = data["commands"]
+            config.commands = {
+                "enabled": cmd.get("enabled", True),
+                "timeout": cmd.get("timeout", 30),
+                "allow": cmd.get("allow", []),
+                "deny": cmd.get("deny", []),
+            }
 
         # redact engine
         config.redact_engine = RedactEngine.from_config(data)
